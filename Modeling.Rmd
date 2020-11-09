@@ -1,0 +1,203 @@
+---
+title: "Modeling"
+output: html_notebook
+---
+
+
+library(tidyverse)
+library(kableExtra)
+library(scales)
+library(caret)
+library(modelr)
+library(ROSE)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(plotly)
+
+
+
+train_set <- read_csv("../results/state_train_CA.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+  mutate_if(is.logical, factor) %>%
+  mutate_if(is.character, factor) %>%
+  select(-Severity)
+
+
+
+ggplot(train_set, aes(Status)) +
+  geom_bar(aes(fill = Status)) +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03)) +
+  labs(y = "Count",
+       title = "Unbalanced severity levels")
+
+
+new_train <- ovun.sample(Status ~ ., 
+                         data = train_set, 
+                         method = "both", p = 0.5, N = 90000, seed = 1)$data %>% as_tibble()
+
+
+
+ggplot(new_train, aes(Status)) +
+  geom_bar(aes(fill = Status)) +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03)) +
+  labs(y = "Count",
+       title = "Balanced severity levels")
+
+
+model_aic <- glm(Status ~ ., data = new_train, family = "binomial")
+model_aic <- step(model_aic)
+
+model_aic <- readRDS("../results/logistic/lr_model_aic_CA.rds")
+
+
+
+model_aic$anova[2:nrow(model_aic$anova), c(1, 6)] %>% as_tibble() %>% mutate(Step = str_sub(Step, start = 3)) %>%
+  rename("Vaiables to drop" = Step) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed" ,"bordered"))
+
+
+model_aic$call
+
+
+valid_set <- read_csv("../results/logistic/lr_valid_pred_CA.csv")
+valid_pred <- valid_set %>%
+  mutate(pred = ifelse(pred > 0.6, "Severe", "Not Severe"))
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+
+```{r slr-code, eval=FALSE}
+x <- model.matrix(Status ~ ., data = new_train)
+model_total <- glmnet(x, new_train$Status, family = "binomial")
+plot(model_total)
+```
+<div class="plot-center">
+```{r slr-plot, echo=FALSE}
+model_total <- readRDS("../results/slr_model_total_CA.rds")
+plot(model_total, xvar = "lambda", label = T)
+```
+</div>
+
+To get the best sparse logistic model, we need to find the best tuning parameter $\lambda$. Cross validation is used to find the best $\lambda$ here.
+
+```{r slr-code2, eval=FALSE}
+model_lambda <- cv.glmnet(x, new_train$Status, family = "binomial")
+plot(model_lambda)
+```
+
+<div class="plot-center">
+```{r slr-plot2, echo=FALSE}
+model_lambda <- readRDS("../results/slr_model_lambda_CA.rds")
+plot(model_lambda)
+```
+</div>
+
+With the best tuning parameter $\lambda$, we then build the model and make predictions on the validation dataset. We also set the cutoff as 0.6 to gain a higher total accuracy.
+
+<div class="plot-center">
+```{r valid, message=FALSE, echo=FALSE}
+valid_set <- read_csv("../results/sparse_logistic/valid_pred/slr_valid_pred_CA.csv")
+valid_pred <- valid_set %>%
+  mutate(pred = ifelse(pred > 0.6, "Severe", "Not Severe"))
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+```
+</div>
+
+### Decision trees
+
+
+```{r decision-code}
+model_decision <- rpart(Status ~ ., data = new_train, method = "class", minsplit = 20, cp = 0.001)
+```
+
+
+```{r decision-plot, warning=FALSE, fig.width=13, fig.height=6}
+rpart.plot(model_decision, box.palette = "RdBu", shadow.col = "grey", )
+```
+
+
+<div class="plot-center">
+```{r decision-read, echo=FALSE, message=FALSE}
+valid_set <- read_csv("../results/state_valid_CA.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+  mutate_if(is.logical, factor) %>%
+  mutate_if(is.character, factor) %>%
+  select(-Severity)
+valid_pred <- valid_set %>%
+  mutate(pred = predict(model_decision, valid_set, type = "class"))
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+```
+
+
+### Random forest
+
+
+```{r rf-code, eval=FALSE}
+model_rf <- randomForest(Status ~ ., data = new_train, mtry = 6, ntree = 500)
+```
+
+These two arguments here are very important:
+
+```{r rf-table, echo=FALSE}
+tibble("Name" = c("mtry", "ntree"), 
+       "Description" = c( "Number of variables randomly sampled as candidates at each split",
+                          "Number of trees to grow")) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+
+
+```{r rf-perd, echo=FALSE, message=FALSE}
+valid_pred <- read_csv("../results/random_forest/rf_data_pred/rf_valid_pred_CA.csv")
+cm <- confusionMatrix(table(valid_pred$pred, valid_pred$Status))
+tibble("Accuracy" = cm$overall[[1]], "Sensitivity" = cm$byClass[[1]],
+          "Specificity" = cm$byClass[[2]], "Positive term" = cm$positive) %>%
+  kable(align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+cm
+```
+
+```{r conclusion, echo=FALSE}
+tibble("Model" = c("Logistic Regression", "Sparse Logistic Regression", "Decision Tree", "Random Forest"),
+                 "Accuracy" = c(0.7154623, 0.7138375, 0.8525123, 0.8849106),
+                 "Sensitivity" = c(0.7352326, 0.7277552, 0.8523101, 0.870184),
+                 "Specificity" = c(0.6754223, 0.6856505, 0.852922, 0.9147357)) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+```
+
+```{r conclusion-plot, echo=FALSE}
+result  <- tibble("Model" = c("Logistic Regression", "Sparse Logistic Regression", "Decision Tree", "Random Forest"),
+                 "Accuracy" = c(0.7154623, 0.7138375, 0.8525123, 0.8849106),
+                 "Sensitivity" = c(0.7352326, 0.7277552, 0.8523101, 0.870184),
+                 "Specificity" = c(0.6754223, 0.6856505, 0.852922, 0.9147357)) %>%
+pivot_longer(2:4, names_to = "type", values_to = "value")
+g <- result %>%
+  mutate(Model = factor(Model, levels = c("Logistic Regression", "Sparse Logistic Regression", "Decision Tree", "Random Forest"))) %>%
+           ggplot(aes(type, value, fill = Model)) +
+  geom_col(position = "dodge") +
+  scale_fill_discrete(name = "Model") +
+  labs(x = "Performance",
+      y = NULL,
+      title = "Comparison of model performance")
+ggplotly(g)
+```
+</div>

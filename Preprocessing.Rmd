@@ -1,0 +1,88 @@
+---
+title: "Preprocessing"
+output: html_notebook
+---
+
+library(tidyverse)
+library(kableExtra)
+library(scales)
+library(caret)
+library(modelr)
+
+
+df <- read_csv("../tidy.csv", col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = factor(Wday)) %>%
+  mutate_if(is.logical, factor) %%
+  mutate_if(is.character, factor)
+
+
+df_CA <- df %>% filter(State == "CA") %>% select(-State)
+df_CA %>%
+  head(5) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  scroll_box(width = "100%")
+
+
+df_CA %>% count(Weather_Condition) %>% filter(n < 20) %>% select(Weather_Condition, n) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered")) %>%
+  column_spec(2, width = "10em")
+drop_weather <- df_CA %>% count(Weather_Condition) %>% filter(n < 20) %>% select(Weather_Condition)
+drop_weather <- drop_weather$Weather_Condition %>% unlist()
+df_CA <- df_CA %>% 
+  filter(!(Weather_Condition %in% drop_weather)) %>% 
+  mutate(Weather_Condition = factor(Weather_Condition))
+df_CA %>% count(TMC) %>% filter(n < 10) %>%
+  kable(align = "l") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered")) %>%
+  column_spec(2, width = "10em")
+drop_TMC <- df_CA %>% count(TMC) %>% filter(n < 10) %>% select(TMC)
+drop_TMC <- drop_TMC$TMC %>% unlist()
+df_CA <- df_CA %>% filter(!TMC %in% drop_TMC) %>% mutate(TMC = factor(TMC))
+
+
+
+ggplot(df_CA, aes(Severity, fill = !Severity %in% c(3, 4))) +
+  geom_bar() +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03)) +
+  scale_fill_discrete(name = "Severity", labels = c("Severe: 3 or 4", "Not Severe: 1 or 2")) +
+  labs(y = "Count",
+       title = "Unbalanced severity levels")
+
+
+
+
+df_label <- df_CA %>%
+  mutate("Status" = factor(ifelse(Severity == "3" | Severity == "4", "Severe", "Not Severe"), 
+                           levels = c("Not Severe", "Severe")))
+df_label %>% select(Severity, Status) %>%
+  head(5) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"))
+
+
+nzv <- nearZeroVar(df_label, saveMetrics = T)
+
+
+
+
+nzv[nzv$nzv,] %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  scroll_box(width = "100%", height = "300px")
+
+
+nzv_cols <- rownames(nzv[nzv$nzv,])
+df_label <- df_label %>%
+  select(-all_of(nzv_cols))
+
+
+set.seed(1)
+df_parts <- resample_partition(df_label, c(train = 0.6, valid = 0.2, test = 0.2))
+train_set <- as_tibble(df_parts$train)
+valid_set <- as_tibble(df_parts$valid)
+test_set <- as_tibble(df_parts$test)
+
+

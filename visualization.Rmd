@@ -1,0 +1,168 @@
+---
+title: "Visualization"
+output: html_notebook
+---
+
+library(tidyverse)
+library(scales)
+library(plotly)
+library(gridExtra)
+library(modelr)
+library(tidytext)
+
+df <- read_csv('../tidy.csv', col_types = cols(.default = col_character())) %>% 
+  type_convert() %>%
+  mutate(TMC = factor(TMC), Severity = factor(Severity), Year = factor(Year), Wday = 
+
+factor(Wday)) %>%
+    mutate_if(is.logical, factor) %>%
+    mutate_if(is.character, factor)
+
+states <- map_data("state") %>% as_tibble() %>% select(long, lat, group, region)
+
+states_abb <- read_csv("../states.csv") %>%
+  mutate(State = tolower(State)) %>%
+  select(State, Code) %>%
+  rename("State_full" = State)
+
+accident_count <- df %>%
+  count(State) %>%
+  left_join(states_abb, by = c("State" = "Code"))
+
+states <- states %>%
+  left_join(accident_count, by = c("region" = "State_full"))
+
+
+top_10 <- accident_count %>%
+  arrange(desc(n)) %>%
+  head(10)
+
+top_10 <- top_10$State %>% unlist()
+
+top_10_map <- states %>%
+  filter(State %in% top_10)
+
+top_10_label <- top_10_map %>%
+  group_by(region, State) %>%
+  summarise(long = mean(long), lat = mean(lat))
+
+ggplot(states, aes(long, lat, group = group)) +
+  geom_polygon(aes(fill = n), color = "#636363", size = 0.1) +
+  geom_polygon(data = top_10_map, color = "red", fill = NA, size = 0.8) +
+  scale_fill_gradient(low = "#fee5d9", high = "#de2d26",
+                      name = "Accident Count", labels = unit_format(unit = "K", scale = 1e-03)) +
+  ggrepel::geom_label_repel(mapping = aes(label = State, group = 1), data = top_10_label) +
+  theme_minimal() +
+  coord_quickmap() +
+  labs(title = "Accident distribution in the U.S.",
+       x = "Longitude",
+       y = "Latitude")
+
+
+df %>% 
+  filter(State %in% top_10) %>%
+  count(State) %>%
+  ggplot(aes(reorder(State, n), n)) +
+  geom_col() +
+  geom_label(aes(label = n), nudge_y = -30000) +
+  labs(x = NULL, y = "Number of accidents",
+       title = "Top 10 States with the most accidents") +
+  scale_x_discrete(labels = rev(c("California", "Texas", "Florida", "South Carolina",
+                              "North Carolina", "New York", "Pennsylvania",
+                              "Michigan", "Illinois", "Georgia"))) +
+  scale_y_continuous(breaks = seq(0, 700000, 100000), labels = unit_format(unit = "K", scale = 1e-03)) +
+  coord_flip()
+
+df %>%
+  group_by(Severity) %>%
+  summarise(prop = mean(Distance)) %>%
+  ggplot(aes(Severity, prop, fill = !Severity %in% c(3, 4))) +
+    geom_col() +
+    labs(
+      y = "Average affected distance (mi)",
+      title = "More severe accidents tend to affect longer road distance") +
+    scale_fill_discrete(name = "Severity", labels = c("More Severe: 3 or 4", "Less Severe: 1 or 2"))
+
+
+g <- df %>%
+  group_by(Year, Severity) %>%
+  count() %>%
+  group_by(Year) %>%
+  mutate(sum = sum(n)) %>%
+  mutate(Proportion = n / sum) %>%
+  ggplot(aes(Severity, Proportion)) +
+  geom_col(aes(fill = Year), position = "dodge") +
+  labs(x = "Severity",
+       y = "Proportion",
+       title = "Severity proportion changes by year",
+       subtitle = "Use zoom in tool to clearly see the change of severity level 1 and 4") +
+  scale_y_continuous(labels = percent)
+ggplotly(g)
+
+
+g_top <- df %>%
+  count(Month) %>%
+  ggplot(aes(Month, n)) +
+  geom_line(aes(group = 1)) +
+  geom_point() +
+  labs(y = "Count",
+       x = NULL,
+    title = "Pattern between accident counts and month & day of the week") +
+  scale_x_discrete(labels = c("Jan", "Feb", "Mar", "Apr", "May",
+                              "Jun", "Jul", "Aug", "Sep", "Oct",
+                              "Nov", "Dec")) +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+g_bottom <- df %>%
+  ggplot(aes(Month, fill = Wday)) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = c("deepskyblue1", "coral1", "coral1","coral1","coral1","coral1", "deepskyblue1"),
+                    name = "Day of the week",
+                    labels = c("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")) +
+  theme(legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 1)) +
+  scale_x_discrete(labels = c("Jan", "Feb", "Mar", "Apr", "May",
+                              "Jun", "Jul", "Aug", "Sep", "Oct",
+                              "Nov", "Dec")) +
+  labs(y = "Count") +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+grid.arrange(g_top, g_bottom, heights = c(1/4, 3/4))
+
+
+right <- df %>%
+  ggplot(aes(Hour, color = Wday %in% c("1", "7"), group = Wday %in% c("1", "7"))) +
+  geom_freqpoly(stat = "count") +
+  scale_color_discrete(name = "Is weekdays?", labels = c("No", "Yes")) +
+  labs(y = NULL,
+       title = " ") +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+  
+left <- df %>%
+  ggplot(aes(Hour, fill = !Hour %in% c("07", "08", "16", "17"))) +
+    geom_bar(show.legend = F) +
+    labs(x = "Hour",
+         y = "No of Accidents",
+         title = "Hourly Distribution of Accidents") +
+  scale_y_continuous(labels = unit_format(unit = "K", scale = 1e-03))
+grid.arrange(left, right, widths = c(1/2, 1/2))
+
+
+weather <- df %>% group_by(Severity) %>% count(Weather_Condition) %>% mutate(n = n / sum(n)) %>% filter(n > 0.02)
+
+weather <- weather$Weather_Condition
+
+df %>%
+  filter(Weather_Condition %in% weather) %>%
+  group_by(Severity) %>%
+  count(Weather_Condition) %>%
+  mutate(n = n / sum(n)) %>%
+  ggplot(aes(reorder_within(Weather_Condition, n, Severity), n)) +
+  geom_col(aes(fill = !Weather_Condition == "Clear"), show.legend = F) +
+  facet_wrap(~ Severity, scales = "free_y") +
+  coord_flip() +
+  scale_x_reordered() +
+  scale_y_continuous(breaks = seq(0, 0.4, 0.05), labels = percent) +
+  geom_ref_line(h = 0.1, colour = "red", size = 1) +
+  geom_ref_line(h = 0.3, colour = "red", size = 1) +
+  labs(x = "Weather Condition",
+       y = "Proportion",
+       title = "Weather condition does not have a strong impact on accident severity")

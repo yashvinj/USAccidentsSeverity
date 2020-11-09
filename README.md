@@ -22,6 +22,8 @@ Next, during the modeling phase, the models were fitted to predict severity thro
 On the other hand, tree-based algorithms like decision tree and random forest have a built-in feature selection to make selecting predictor variables easier. However, the decision tree model that was constructed had a high accuracy on the training set but a relatively low accuracy on the test set. This is a direct cause of overfitting the data. To remedy this situation, the random forest model used a sampling technique called bootstrapping. The number of variables from the subset were randomly selected as candidate variables using mtry and number of trees to be constructed through ntree.  The final error rate was plotted against mtry to get the optimal value. Furthermore, it was observed that random forest had the superior performance among the four models.
 
 
+## Results
 
+In conclusion, random forest was chosen as our final classification model as it gave the best accuracy of 85%. Its existing feature selection can make extending the model easier. Since the scope of the project was limited to the top ten states, a future model could include data from an additional number of states and perhaps include the missing state: Hawaii. Predicting the severity of the accident could potentially help with retrieving the estimate of overall traffic delay and assisting with traffic rerouting. Similarly, the project may be expanded to a real time accident prediction system to warn the users of possible accidents in the vicinity. 
 
 
